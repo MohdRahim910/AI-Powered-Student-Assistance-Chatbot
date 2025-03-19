@@ -1,1 +1,108 @@
+import requests
+from bs4 import BeautifulSoup
+import openai
+from docx import Document
+import PyPDF2
+
+openai.api_key = "OPENAI_API_KEY"
+
+def fetch_content_from_url(url):
+    try:
+        response = requests.get(url)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, 'html.parser')
+        paragraphs = soup.find_all('p')
+        text_content = " ".join(p.get_text() for p in paragraphs)
+        return text_content
+    except Exception as e:
+        print(f"Error fetching {url}: {e}")
+        return ""
+
+def read_text_file(file_path):
+    try:
+        with open(file_path, 'r') as file:
+            return file.read()
+    except Exception as e:
+        print(f"Error reading {file_path}: {e}")
+        return ""
+
+def read_pdf_file(file_path):
+    try:
+        with open(file_path, 'rb') as file:
+            reader = PyPDF2.PdfReader(file)
+            text = ""
+            for page in reader.pages:
+                text += page.extract_text() or ""
+            return text
+    except Exception as e:
+        print(f"Error reading {file_path}: {e}")
+        return ""
+
+def read_docx_file(file_path):
+    try:
+        doc = Document(file_path)
+        return " ".join([para.text for para in doc.paragraphs])
+    except Exception as e:
+        print(f"Error reading {file_path}: {e}")
+        return ""
+
+def aggregate_data(urls, file_paths):
+    aggregated_content = ""
+
+    for url in urls:
+        content = fetch_content_from_url(url)
+        if content:
+            aggregated_content += f"\n\nData from {url}:\n{content}\n"
+
+    for file_path in file_paths:
+        if file_path.endswith('.txt'):
+            content = read_text_file(file_path)
+        elif file_path.endswith('.pdf'):
+            content = read_pdf_file(file_path)
+        elif file_path.endswith('.docx'):
+            content = read_docx_file(file_path)
+        else:
+            print(f"Unsupported file type: {file_path}")
+            continue
+
+        if content:
+            aggregated_content += f"\n\nData from {file_path}:\n{content}\n"
+
+    return aggregated_content
+
+def generate_answer(user_query, context_data):
+    messages = [
+        {"role": "system", "content": "You are an assistant that answers questions using provided context from multiple sources."},
+        {"role": "user", "content": f"User Query: {user_query}\n\nContext Data: {context_data}\n\nPlease provide a detailed answer."}
+    ]
+
+    response = openai.chat.completions.create(
+        model="gpt-3.5-turbo",
+        messages=messages
+    )
+    return response.choices[0].message.content
+
+def main():
+    websites = [
+        "https://presidencyuniversity.in/",
+        "https://presidencyuniversity.in/placements/placement-overview",
+        "https://presidencyuniversity.in/school/school-of-computer-science-engineering/faculty"
+    ]
+
+    file_paths = [
+        "/content/curriculum_report.pdf",
+        "/content/program outcome.pdf"
+    ]
+
+    user_query = input("Hey! How can I help you?: ")
+
+    context_data = aggregate_data(websites, file_paths)
+
+    answer = generate_answer(user_query, context_data)
+
+    print("\nAnswer:")
+    print(answer)
+
+if __name__ == "__main__":
+    main()
 
