@@ -1,41 +1,56 @@
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from typing import List
 import requests
 from bs4 import BeautifulSoup
 import openai
 from docx import Document
 import PyPDF2
+import os
 
-openai.api_key = "OPENAI_API_KEY"
+openai.api_key = os.getenv("YOUR-OPENAI-KEY")
+
+app = FastAPI()
+
+# CORS so frontend can talk to backend
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Hardcoded URLs and File Paths
+websites = [
+    "https://presidencyuniversity.in/",
+    "https://presidencyuniversity.in/placements/placement-overview",
+    "https://presidencyuniversity.in/school/school-of-computer-science-engineering/faculty"
+]
+
+file_paths = [
+    "curriculum_report.pdf",
+    "program_outcome.pdf"
+]
 
 def fetch_content_from_url(url):
     try:
         response = requests.get(url)
-        response.raise_for_status()
         soup = BeautifulSoup(response.text, 'html.parser')
         paragraphs = soup.find_all('p')
-        text_content = " ".join(p.get_text() for p in paragraphs)
-        return text_content
+        return " ".join(p.get_text() for p in paragraphs)
     except Exception as e:
-        print(f"Error fetching {url}: {e}")
-        return ""
-
-def read_text_file(file_path):
-    try:
-        with open(file_path, 'r') as file:
-            return file.read()
-    except Exception as e:
-        print(f"Error reading {file_path}: {e}")
+        print(f"Error fetching URL: {e}")
         return ""
 
 def read_pdf_file(file_path):
     try:
         with open(file_path, 'rb') as file:
             reader = PyPDF2.PdfReader(file)
-            text = ""
-            for page in reader.pages:
-                text += page.extract_text() or ""
-            return text
+            return " ".join([page.extract_text() or "" for page in reader.pages])
     except Exception as e:
-        print(f"Error reading {file_path}: {e}")
+        print(f"Error reading PDF: {e}")
         return ""
 
 def read_docx_file(file_path):
@@ -43,37 +58,26 @@ def read_docx_file(file_path):
         doc = Document(file_path)
         return " ".join([para.text for para in doc.paragraphs])
     except Exception as e:
-        print(f"Error reading {file_path}: {e}")
+        print(f"Error reading DOCX: {e}")
         return ""
 
-def aggregate_data(urls, file_paths):
-    aggregated_content = ""
+def get_all_context():
+    content = ""
+    for url in websites:
+        content += f"\nFrom {url}:\n{fetch_content_from_url(url)}\n"
 
-    for url in urls:
-        content = fetch_content_from_url(url)
-        if content:
-            aggregated_content += f"\n\nData from {url}:\n{content}\n"
+    for path in file_paths:
+        if path.endswith('.pdf'):
+            content += f"\nFrom {path}:\n{read_pdf_file(path)}\n"
+        elif path.endswith('.docx'):
+            content += f"\nFrom {path}:\n{read_docx_file(path)}\n"
 
-    for file_path in file_paths:
-        if file_path.endswith('.txt'):
-            content = read_text_file(file_path)
-        elif file_path.endswith('.pdf'):
-            content = read_pdf_file(file_path)
-        elif file_path.endswith('.docx'):
-            content = read_docx_file(file_path)
-        else:
-            print(f"Unsupported file type: {file_path}")
-            continue
+    return content
 
-        if content:
-            aggregated_content += f"\n\nData from {file_path}:\n{content}\n"
-
-    return aggregated_content
-
-def generate_answer(user_query, context_data):
+def generate_answer(question, context):
     messages = [
-        {"role": "system", "content": "You are an assistant that answers questions using provided context from multiple sources."},
-        {"role": "user", "content": f"User Query: {user_query}\n\nContext Data: {context_data}\n\nPlease provide a detailed answer."}
+        {"role": "system", "content": "You are an assistant that answers the questions in simple and short way using provided context."},
+        {"role": "user", "content": f"User Question: {question}\n\nContext:\n{context}\n\nAnswer clearly and helpfully."}
     ]
 
     response = openai.chat.completions.create(
@@ -82,27 +86,17 @@ def generate_answer(user_query, context_data):
     )
     return response.choices[0].message.content
 
-def main():
-    websites = [
-        "https://presidencyuniversity.in/",
-        "https://presidencyuniversity.in/placements/placement-overview",
-        "https://presidencyuniversity.in/school/school-of-computer-science-engineering/faculty"
-    ]
+# Request models
+class Message(BaseModel):
+    role: str
+    content: str
 
-    file_paths = [
-        "/content/curriculum_report.pdf",
-        "/content/program outcome.pdf"
-    ]
+class ChatRequest(BaseModel):
+    messages: List[Message]
 
-    user_query = input("Hey! How can I help you?: ")
-
-    context_data = aggregate_data(websites, file_paths)
-
-    answer = generate_answer(user_query, context_data)
-
-    print("\nAnswer:")
-    print(answer)
-
-if __name__ == "__main__":
-    main()
-
+@app.post("/chat")
+async def chat(data: ChatRequest):
+    question = data.messages[-1].content  # latest user message
+    context_data = get_all_context()
+    answer = generate_answer(question, context_data)
+    return {"response": answer}
